@@ -1,0 +1,1 @@
+# zabbix_test_spoj_solutions

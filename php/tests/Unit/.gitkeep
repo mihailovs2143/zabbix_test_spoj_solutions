@@ -1,0 +1,5 @@
+# Unit Tests
+
+This directory contains unit tests for reusable components (utilities, data structures, algorithms).
+
+Problem-specific tests are in `php/tests/Problems/`.

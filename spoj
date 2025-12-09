@@ -1,0 +1,511 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * SPOJ CLI Tool - Interactive problem runner
+ * Usage: php spoj
+ */
+
+define('SPOJ_CLI_MODE', true);
+
+require_once __DIR__ . '/php/src/Common/ProblemDescriptions.php';
+
+// ANSI Colors
+const COLOR_RESET = "\033[0m";
+const COLOR_BOLD = "\033[1m";
+const COLOR_GREEN = "\033[32m";
+const COLOR_BLUE = "\033[34m";
+const COLOR_YELLOW = "\033[33m";
+const COLOR_RED = "\033[31m";
+const COLOR_CYAN = "\033[36m";
+const COLOR_GRAY = "\033[90m";
+
+class SpojCLI
+{
+    private string $projectRoot;
+    private array $problems = [];
+    private string $inputMode = 'manual';
+    private string $outputMode = 'cmd';
+    private ?string $inputFile = null;
+    private ?string $outputFile = null;
+
+    public function __construct()
+    {
+        $this->projectRoot = __DIR__;
+        $this->scanProblems();
+    }
+
+    public function run(): void
+    {
+        $this->printHeader();
+        $this->printMenu();
+
+        while (true) {
+            $choice = $this->readInput("\n" . COLOR_CYAN . "Выберите действие(Меню - m): " . COLOR_RESET);
+
+            switch ($choice) {
+                case '0':
+                    $this->configureInputMode();
+                    break;
+                case '1':
+                    $this->configureOutputMode();
+                    break;
+                case '2':
+                    $this->selectProblem();
+                    break;
+                case '3':
+                    $this->showStatus();
+                    break;
+                case '4':
+                    $this->runAllTests();
+                    break;
+                case 'm':
+                case 'menu':
+                    $this->printMenu();
+                    break;
+                case 'q':
+                case 'exit':
+                    $this->printSuccess("До свидания!");
+                    exit(0);
+                default:
+                    $this->printError("Неверный выбор!");
+            }
+        }
+    }
+
+    private function printHeader(): void
+    {
+        echo COLOR_BOLD . COLOR_BLUE;
+        echo "╔════════════════════════════════════════════════╗\n";
+        echo "║     SPOJ CLI - Zabbix Interview Solutions     ║\n";
+        echo "║              Interactive Runner                ║\n";
+        echo "╚════════════════════════════════════════════════╝\n";
+        echo COLOR_RESET . "\n";
+    }
+
+    private function printMenu(): void
+    {
+        echo "\n" . COLOR_BOLD . "=== ГЛАВНОЕ МЕНЮ ===" . COLOR_RESET . "\n\n";
+        echo COLOR_YELLOW . "Настройки:" . COLOR_RESET . "\n";
+        echo "  0. Выбрать способ ввода данных  [" . COLOR_GREEN . $this->inputMode . COLOR_RESET . "]\n";
+        echo "  1. Выбрать формат вывода         [" . COLOR_GREEN . $this->outputMode . COLOR_RESET . "]\n";
+        echo "\n" . COLOR_YELLOW . "Действия:" . COLOR_RESET . "\n";
+        echo "  2. Выбрать и запустить задачу\n";
+        echo "  3. Показать текущий статус\n";
+        echo "  4. Запустить все тесты (PHPUnit)\n";
+        echo "\n" . COLOR_YELLOW . "Навигация:" . COLOR_RESET . "\n";
+        echo "  m. Показать меню\n";
+        echo "  q. Выход\n";
+    }
+
+    private function configureInputMode(): void
+    {
+        echo "\n" . COLOR_BOLD . "=== СПОСОБ ВВОДА ДАННЫХ ===" . COLOR_RESET . "\n\n";
+        echo "1. Ручной ввод (построчно)\n";
+        echo "2. JSON (одной строкой)\n";
+        echo "3. Из файла .txt\n";
+        echo "0. Назад\n";
+
+        $choice = $this->readInput("\nВыберите: ");
+
+        switch ($choice) {
+            case '1':
+                $this->inputMode = 'manual';
+                $this->printSuccess("Режим ввода: Ручной");
+                break;
+            case '2':
+                $this->inputMode = 'json';
+                $this->printSuccess("Режим ввода: JSON");
+                break;
+            case '3':
+                $this->inputMode = 'file';
+                $file = $this->readInput("Путь к файлу: ");
+                if (file_exists($file)) {
+                    $this->inputFile = $file;
+                    $this->printSuccess("Режим ввода: Файл ($file)");
+                } else {
+                    $this->printError("Файл не найден!");
+                    $this->inputMode = 'manual';
+                }
+                break;
+            case '0':
+                return;
+            default:
+                $this->printError("Неверный выбор!");
+        }
+    }
+
+    private function configureOutputMode(): void
+    {
+        echo "\n" . COLOR_BOLD . "=== ФОРМАТ ВЫВОДА ===" . COLOR_RESET . "\n\n";
+        echo "1. CMD (консоль, обычный текст)\n";
+        echo "2. CMD JSON (консоль, JSON формат)\n";
+        echo "3. Файл output.txt\n";
+        echo "0. Назад\n";
+
+        $choice = $this->readInput("\nВыберите: ");
+
+        switch ($choice) {
+            case '1':
+                $this->outputMode = 'cmd';
+                $this->printSuccess("Режим вывода: CMD");
+                break;
+            case '2':
+                $this->outputMode = 'cmd_json';
+                $this->printSuccess("Режим вывода: CMD JSON");
+                break;
+            case '3':
+                $this->outputMode = 'file';
+                $file = $this->readInput("Путь к файлу (default: output.txt): ");
+                $this->outputFile = empty($file) ? 'output.txt' : $file;
+                $this->printSuccess("Режим вывода: Файл ({$this->outputFile})");
+                break;
+            case '0':
+                return;
+            default:
+                $this->printError("Неверный выбор!");
+        }
+    }
+
+    private function selectProblem(): void
+    {
+        if (empty($this->problems)) {
+            $this->printError("Задачи не найдены!");
+            return;
+        }
+
+        echo "\n" . COLOR_BOLD . "=== ВЫБОР ЗАДАЧИ ===" . COLOR_RESET . "\n\n";
+
+        $index = 1;
+        $problemsList = [];
+        foreach ($this->problems as $problem) {
+            echo sprintf("%d. %s\n", $index, COLOR_GREEN . $problem . COLOR_RESET);
+            $problemsList[$index] = $problem;
+            $index++;
+        }
+        echo "0. Назад\n";
+
+        $choice = $this->readInput("\nВыберите задачу: ");
+
+        if ($choice === '0') {
+            return;
+        }
+
+        $selected = (int) $choice;
+        if (!isset($problemsList[$selected])) {
+            $this->printError("Неверный выбор!");
+            return;
+        }
+
+        $this->runProblem($problemsList[$selected]);
+    }
+
+    private function runProblem(string $problem): void
+    {
+        $problemPath = $this->projectRoot . '/php/problems/' . $problem;
+        $solutionFile = $problemPath . '/solution.php';
+
+        if (!file_exists($solutionFile)) {
+            $this->printError("Файл решения не найден: $solutionFile");
+            return;
+        }
+
+        echo "\n" . COLOR_BOLD . COLOR_BLUE . "=== Запуск: $problem ===" . COLOR_RESET . "\n\n";
+
+        // Получаем входные данные
+        $inputData = $this->getInputData($problem, $problemPath);
+        if ($inputData === null || $inputData === '') {
+            return;
+        }
+
+        // Запускаем решение
+        $startTime = microtime(true);
+        $output = $this->executeProblem($solutionFile, $inputData);
+        $executionTime = (microtime(true) - $startTime) * 1000; // ms
+
+        // Выводим результат
+        $this->displayOutput($output, $executionTime);
+    }
+
+    private function getInputData(string $problem, string $problemPath): ?string
+    {
+        switch ($this->inputMode) {
+            case 'manual':
+                return $this->getManualInput($problem);
+            case 'json':
+                return $this->getJsonInput();
+            case 'file':
+                if ($this->inputFile && file_exists($this->inputFile)) {
+                    return file_get_contents($this->inputFile);
+                }
+                // Fallback to test file
+                $testFile = $problemPath . '/test_cases/input1.txt';
+                if (file_exists($testFile)) {
+                    echo COLOR_YELLOW . "Используется тестовый файл: $testFile" . COLOR_RESET . "\n\n";
+                    return file_get_contents($testFile);
+                }
+                $this->printError("Файл входных данных не найден!");
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    private function getManualInput(string $problem): string
+    {
+        echo COLOR_CYAN . "\n📝 Ручной ввод данных\n" . COLOR_RESET;
+        
+        // Получаем описание задачи
+        try {
+            $desc = ProblemDescriptions::getDescription($problem);
+            echo COLOR_YELLOW . "Задача: " . COLOR_RESET . COLOR_GREEN . $desc['name'] . COLOR_RESET . "\n";
+            echo COLOR_GRAY . $desc['description'] . COLOR_RESET . "\n\n";
+            
+            echo COLOR_YELLOW . "Пример ввода:\n" . COLOR_RESET;
+            echo COLOR_GRAY . $desc['example'] . COLOR_RESET . "\n\n";
+        } catch (Exception $e) {
+            echo COLOR_YELLOW . "Описание задачи не найдено\n" . COLOR_RESET;
+        }
+
+        // Очищаем буфер STDIN перед чтением
+        if (function_exists('stream_set_blocking')) {
+            stream_set_blocking(STDIN, false);
+            while (fgets(STDIN) !== false) {
+                // Очистка буфера
+            }
+            stream_set_blocking(STDIN, true);
+        }
+
+        // Пытаемся использовать строгий обработчик ввода
+        $handler = ProblemDescriptions::getInputHandler($problem);
+        
+        if ($handler !== null) {
+            // Строгий режим с валидацией
+            echo COLOR_GREEN . "Режим: строгий ввод с валидацией\n\n" . COLOR_RESET;
+            $result = $handler();
+            
+            // Если обработчик вернул пустую строку - ошибка валидации
+            if ($result === '') {
+                echo COLOR_RED . "\n✗ Ввод отменён из-за ошибки валидации\n" . COLOR_RESET;
+                return '';
+            }
+            
+            return $result;
+        }
+        
+        // Fallback: старый свободный режим
+        echo COLOR_YELLOW . "Режим: свободный ввод\n" . COLOR_RESET;
+        echo COLOR_YELLOW . "Введите данные (пустая строка для завершения):\n" . COLOR_RESET;
+        
+        $input = '';
+        $lineCount = 0;
+        
+        while (true) {
+            $line = fgets(STDIN);
+            
+            if ($line === false) {
+                break;
+            }
+            
+            // Пустая строка и уже есть данные - завершаем
+            if (trim($line) === '' && $lineCount > 0) {
+                break;
+            }
+            
+            // Пропускаем начальные пустые строки
+            if (trim($line) === '' && $lineCount === 0) {
+                continue;
+            }
+            
+            $input .= $line;
+            $lineCount++;
+        }
+        
+        return $input;
+    }
+
+    private function getJsonInput(): string
+    {
+        echo COLOR_YELLOW . "Введите JSON массив (например: [2, 5, 2, 3, 2, 3, 4]):" . COLOR_RESET . "\n";
+        $json = trim(fgets(STDIN));
+        $data = json_decode($json, true);
+
+        if ($data === null) {
+            $this->printError("Неверный JSON формат!");
+            return '';
+        }
+
+        return implode("\n", $data);
+    }
+
+    private function executeProblem(string $solutionFile, string $input): string
+    {
+        $descriptors = [
+            0 => ['pipe', 'r'], // STDIN
+            1 => ['pipe', 'w'], // STDOUT
+            2 => ['pipe', 'w'], // STDERR
+        ];
+
+        $process = proc_open("php $solutionFile", $descriptors, $pipes);
+
+        if (!is_resource($process)) {
+            return "ERROR: Cannot start process";
+        }
+
+        fwrite($pipes[0], $input);
+        fclose($pipes[0]);
+
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+
+        $errors = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+
+        proc_close($process);
+        
+        // Очищаем буфер STDIN после процесса
+        if (function_exists('stream_set_blocking')) {
+            stream_set_blocking(STDIN, false);
+            while (fgets(STDIN) !== false) {
+                // Очистка
+            }
+            stream_set_blocking(STDIN, true);
+        }
+
+        if (!empty($errors)) {
+            return "STDERR:\n$errors\n\nSTDOUT:\n$output";
+        }
+
+        return $output;
+    }
+
+    private function displayOutput(string $output, float $executionTime): void
+    {
+        echo "\n" . COLOR_BOLD . COLOR_GREEN . "=== РЕЗУЛЬТАТ ===" . COLOR_RESET . "\n";
+        echo COLOR_CYAN . sprintf("Время выполнения: %.2f ms", $executionTime) . COLOR_RESET . "\n\n";
+
+        switch ($this->outputMode) {
+            case 'cmd':
+                echo $output;
+                break;
+
+            case 'cmd_json':
+                $lines = array_filter(explode("\n", trim($output)));
+                echo json_encode([
+                    'execution_time_ms' => round($executionTime, 2),
+                    'output' => $lines,
+                ], JSON_PRETTY_PRINT) . "\n";
+                break;
+
+            case 'file':
+                file_put_contents($this->outputFile, $output);
+                $this->printSuccess("Результат сохранён в: {$this->outputFile}");
+                echo "\n" . COLOR_YELLOW . "Предпросмотр:" . COLOR_RESET . "\n";
+                echo substr($output, 0, 200) . (strlen($output) > 200 ? "...\n" : "\n");
+                break;
+        }
+    }
+
+    private function showStatus(): void
+    {
+        echo "\n" . COLOR_BOLD . "=== ТЕКУЩИЙ СТАТУС ===" . COLOR_RESET . "\n\n";
+
+        echo COLOR_YELLOW . "Настройки:" . COLOR_RESET . "\n";
+        echo "  Ввод:  " . COLOR_GREEN . $this->inputMode . COLOR_RESET;
+        if ($this->inputFile) {
+            echo " ($this->inputFile)";
+        }
+        echo "\n";
+        echo "  Вывод: " . COLOR_GREEN . $this->outputMode . COLOR_RESET;
+        if ($this->outputFile) {
+            echo " ($this->outputFile)";
+        }
+        echo "\n\n";
+
+        echo COLOR_YELLOW . "Доступные задачи (" . count($this->problems) . "):" . COLOR_RESET . "\n";
+        foreach ($this->problems as $problem) {
+            $problemPath = $this->projectRoot . '/php/problems/' . $problem;
+            $testDir = $problemPath . '/test_cases';
+            $testCount = file_exists($testDir) ? count(glob($testDir . '/input*.txt')) : 0;
+
+            echo "  • " . COLOR_GREEN . $problem . COLOR_RESET;
+            echo " (" . $testCount . " тестов)\n";
+        }
+    }
+
+    private function runAllTests(): void
+    {
+        echo "\n" . COLOR_BOLD . "=== ЗАПУСК PHPUNIT ===" . COLOR_RESET . "\n\n";
+
+        chdir($this->projectRoot);
+
+        passthru('composer test', $exitCode);
+
+        if ($exitCode === 0) {
+            echo "\n";
+            $this->printSuccess("Все тесты прошли успешно!");
+        } else {
+            echo "\n";
+            $this->printError("Некоторые тесты провалились!");
+        }
+    }
+
+    private function scanProblems(): void
+    {
+        $problemsDir = $this->projectRoot . '/php/problems';
+        if (!is_dir($problemsDir)) {
+            return;
+        }
+
+        $dirs = scandir($problemsDir);
+        foreach ($dirs as $dir) {
+            if ($dir === '.' || $dir === '..') {
+                continue;
+            }
+
+            $path = $problemsDir . '/' . $dir;
+            if (is_dir($path) && file_exists($path . '/solution.php')) {
+                $this->problems[] = $dir;
+            }
+        }
+
+        sort($this->problems);
+    }
+
+    private function readInput(string $prompt): string
+    {
+        echo $prompt;
+        // Используем readline если доступно, иначе fgets из STDIN
+        if (function_exists('readline')) {
+            $line = readline();
+            return $line !== false ? trim($line) : '';
+        }
+        
+        $line = fgets(STDIN);
+        return $line !== false ? trim($line) : '';
+    }
+
+    private function printSuccess(string $message): void
+    {
+        echo COLOR_GREEN . "✓ " . $message . COLOR_RESET . "\n";
+    }
+
+    private function printError(string $message): void
+    {
+        echo COLOR_RED . "✗ " . $message . COLOR_RESET . "\n";
+    }
+}
+
+// ============================================
+// Run CLI
+// ============================================
+
+if (php_sapi_name() === 'cli') {
+    $cli = new SpojCLI();
+    $cli->run();
+} else {
+    echo "This script must be run from command line.\n";
+    exit(1);
+}
